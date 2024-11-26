@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>光剑控制器</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border-radius: 5px;
+        }
+        #calibrate {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px 30px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        #debug-panel {
+            position: fixed;
+            top: 50px;
+            left: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">未连接</div>
+    <button id="calibrate">校准位置</button>
+    <div id="debug-panel">等待数据...</div>
+
+    <script>
+        const status = document.getElementById('status');
+        const calibrateBtn = document.getElementById('calibrate');
+        let ws = null;
+        let calibrationOffset = { alpha: 0, beta: 0, gamma: 0 };
+        let lastSendTime = 0;
+        const SEND_INTERVAL = 16; // 约60fps
+
+        function connectWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${location.hostname}:${location.port}`;
+            
+            console.log('尝试连接到:', wsUrl);
+            
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = () => {
+                console.log('WebSocket连接成功');
+                status.textContent = '已连接';
+                status.style.background = 'rgba(0,255,0,0.7)';
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket错误:', error);
+                status.textContent = '连接错误';
+                status.style.background = 'rgba(255,0,0,0.7)';
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket连接关闭');
+                status.textContent = '连接断开，尝试重连...';
+                status.style.background = 'rgba(255,0,0,0.7)';
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        // 数据平滑处理
+        const smoothingFactor = 0.8;
+        let lastData = { alpha: 0, beta: 0, gamma: 0 };
+
+        function smoothData(newData) {
+            return {
+                alpha: lastData.alpha * smoothingFactor + newData.alpha * (1 - smoothingFactor),
+                beta: lastData.beta * smoothingFactor + newData.beta * (1 - smoothingFactor),
+                gamma: lastData.gamma * smoothingFactor + newData.gamma * (1 - smoothingFactor)
+            };
+        }
+
+        const debugPanel = document.getElementById('debug-panel');
+
+        function requestDevicePermission() {
+            return new Promise((resolve, reject) => {
+                if (window.DeviceOrientationEvent !== undefined && 
+                    typeof window.DeviceOrientationEvent.requestPermission === 'function') {
+                    
+                    window.DeviceOrientationEvent.requestPermission()
+                        .then(response => {
+                            console.log('权限响应:', response);
+                            if (response === 'granted') {
+                                resolve(true);
+                            } else {
+                                reject(new Error('权限被拒绝'));
+                            }
+                        })
+                        .catch(error => {
+                            console.error('请求权限时出错:', error);
+                            reject(error);
+                        });
+                } else {
+                    // 不需要权限的设备，直接返回成功
+                    resolve(true);
+                }
+            });
+        }
+
+        function initSensors() {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            
+            calibrateBtn.addEventListener('click', async () => {
+                try {
+                    await requestDevicePermission();
+                    setupSensorListeners();
+                    connectWebSocket();
+                } catch (error) {
+                    console.error('初始化传感器失败:', error);
+                    alert('获取传感器权限失败！请确保在 iOS Safari 中运行，并允许访问传感器。');
+                }
+            });
+
+            if (!isIOS) {
+                // 非 iOS 设备直接初始化
+                setupSensorListeners();
+                connectWebSocket();
+            }
+        }
+
+        function processGyroData(rawData) {
+            // 只计算相对于校准点的角度差，不做任何限制
+            let adjustedData = {
+                alpha: (rawData.alpha - calibrationOffset.alpha + 360) % 360,
+                beta: rawData.beta - calibrationOffset.beta,
+                gamma: rawData.gamma - calibrationOffset.gamma
+            };
+            
+            return adjustedData;
+        }
+
+        function setupSensorListeners() {
+            let accData = { x: 'N/A', y: 'N/A', z: 'N/A' };
+            
+            // 陀螺仪事件监听
+            window.addEventListener('deviceorientation', event => {
+                const now = performance.now();
+                if (now - lastSendTime < SEND_INTERVAL) return;
+                
+                const newData = {
+                    alpha: event.alpha || 0,
+                    beta: event.beta || 0,
+                    gamma: event.gamma || 0
+                };
+                
+                const smoothedData = smoothData(newData);
+                const adjustedData = processGyroData(smoothedData);
+                
+                lastData = adjustedData;
+                
+                // 更新调试面板，包含陀螺仪和加速度数据
+                debugPanel.textContent = `陀螺仪数据：
+Alpha: ${adjustedData.alpha.toFixed(2)}°
+Beta: ${adjustedData.beta.toFixed(2)}°
+Gamma: ${adjustedData.gamma.toFixed(2)}°
+
+加速度数据：
+X: ${accData.x} m/s²
+Y: ${accData.y} m/s²
+Z: ${accData.z} m/s²`;
+                
+                const buffer = new Float32Array([
+                    adjustedData.alpha,
+                    adjustedData.beta,
+                    adjustedData.gamma
+                ]).buffer;
+                
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(buffer);
+                }
+                
+                lastSendTime = now;
+            });
+
+            // 加速度计事件监听
+            window.addEventListener('devicemotion', event => {
+                const acc = event.acceleration;
+                if (acc) {
+                    accData = {
+                        x: acc.x ? acc.x.toFixed(2) : 'N/A',
+                        y: acc.y ? acc.y.toFixed(2) : 'N/A',
+                        z: acc.z ? acc.z.toFixed(2) : 'N/A'
+                    };
+                }
+            });
+        }
+
+        function calibrate() {
+            calibrationOffset = {...lastData};
+            const adjustedData = {
+                alpha: 0,
+                beta: 0,
+                gamma: 0
+            };
+            
+            // 更新调试面板显示校准信息
+            debugPanel.textContent = `校准基准点：
+Alpha: ${calibrationOffset.alpha.toFixed(2)}°
+Beta: ${calibrationOffset.beta.toFixed(2)}°
+Gamma: ${calibrationOffset.gamma.toFixed(2)}°`;
+            
+            // 发送校准后的数据
+            const buffer = new Float32Array([
+                adjustedData.alpha,
+                adjustedData.beta,
+                adjustedData.gamma
+            ]).buffer;
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(buffer);
+            }
+        }
+
+        calibrateBtn.addEventListener('click', calibrate);
+
+        // 初始化连接
+        function initConnection() {
+            initSensors();
+        }
+
+        // 页面加载完成后初始化
+        window.addEventListener('DOMContentLoaded', initConnection);
+    </script>
+</body>
+</html> 

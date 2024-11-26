@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>光剑显示器</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #info {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">未连接</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="js/lightsaber.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/main.js"></script>
+    <script>
+        // 初始化应用
+        window.addEventListener('DOMContentLoaded', () => {
+            window.app = new LightsaberApp();
+        });
+    </script>
+</body>
+</html> 
